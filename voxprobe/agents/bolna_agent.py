@@ -1,0 +1,27 @@
+
+from .agent import Agent
+
+class BolnaAgent(Agent):
+    def __init__(self, config):
+        super().__init__('bolna', config)
+
+    def pull(self):
+        # TODO: Implement pull logic
+        pass
+
+    def evaluate(self):
+        # TODO: Implement evaluation logic
+        pass
+
+    def get_prompt(self):
+        # TODO: Implement prompt retrieval logic
+        pass
+
+    def get_first_message(self):
+        # TODO: Implement first message retrieval logic
+        pass
+
+    def get_executions(self):
+        # TODO: Implement first message retrieval logic
+        pass
+
