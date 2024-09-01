@@ -1,7 +1,7 @@
 class Agent:
-    def __init__(self, platform, config):
+    def __init__(self, platform):
         self.platform = platform
-        self.config = config
+        pass
 
     def pull(self):
         # TODO: Implement pull logic

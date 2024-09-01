@@ -2,8 +2,8 @@
 from .agent import Agent
 
 class VocodeAgent(Agent):
-    def __init__(self, config):
-        super().__init__('vocode', config)
+    def __init__(self):
+        super().__init__('vocode')
 
     def pull(self):
         # TODO: Implement pull logic

@@ -1,5 +1,5 @@
 
-class EvaluatorDataset:
+class CallEvaluator:
     def __init__(self):
         self.evaluation_criteria = []
 

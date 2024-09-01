@@ -2,8 +2,8 @@
 from .agent import Agent
 
 class RetellAgent(Agent):
-    def __init__(self, config):
-        super().__init__('retell', config)
+    def __init__(self):
+        super().__init__('retell')
 
     def pull(self):
         # TODO: Implement pull logic

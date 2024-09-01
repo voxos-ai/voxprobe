@@ -2,8 +2,8 @@
 from .agent import Agent
 
 class VapiAgent(Agent):
-    def __init__(self, config):
-        super().__init__('vapi', config)
+    def __init__(self):
+        super().__init__('vapi')
 
     def pull(self):
         # TODO: Implement pull logic

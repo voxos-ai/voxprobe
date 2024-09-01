@@ -8,7 +8,7 @@ class VoxProbe:
         self.recording_ingester = None
         self.evaluator_dataset = None
 
-    def import_agent(self, platform, agent_config):
+    def import_agent(self, platform):
         # TODO: Implement agent import logic
         pass
 
