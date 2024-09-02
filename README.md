@@ -5,7 +5,7 @@ VoxProbe is a tool for automated testing and evaluation of Voice AI agents.
 ## Installation
 
 ```
-pip install .
+pip install -e . 
 ```
 
 ## Usage
@@ -15,8 +15,21 @@ As a package:
 ```python
 from voxprobe import VoxProbe
 
-voxprobe = VoxProbe()
-# Use VoxProbe methods here
+from voxprobe.datasets import Dataset
+from voxprobe.agents import BolnaAgent
+from voxprobe.testing.telephony_tester.twilio_tester import TwilioTester
+bolna_agent = BolnaAgent(api_key = "")
+bolna_agent.pull()
+
+dataset = Dataset(agent_prompt)
+
+twilio_tester = TwilioTester(bolna_agent, dataset, 
+                             twilio_account_sid="",
+                             twilio_auth_token="",
+                             twilio_incoming_number="")
+
+# Run the tester
+twilio_tester.run()
 ```
 
 As a CLI tool:
