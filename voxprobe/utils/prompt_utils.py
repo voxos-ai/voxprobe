@@ -213,3 +213,38 @@ def create_conversation_graph_prompt(agent_prompt, personas, scenarios):
     Generate the conversation graph now:
     """
     return prompt
+
+def create_persona_llm_prompt(agent_persona, persona, situation, flow):
+    prompt = f"""
+    You are an AI assistant tasked with simulating a conversation between an agent and a persona. The persona has specific traits and is in a particular situation. The conversation should follow a given flow of states. Your task is to generate the conversation turns, ensuring the conversation follows the flow and ends appropriately.
+
+    Agent Persona:
+    - Role: {agent_persona.role}
+    - Personality Traits: {', '.join(agent_persona.personality_traits)}
+    - Communication Style: {agent_persona.communication_style}
+    - Knowledge/Skills: {', '.join(agent_persona.knowledge_skills)}
+    - Goals/Objectives: {', '.join(agent_persona.goals_objectives)}
+
+    Persona:
+    - Name: {persona.persona}
+    - Explanation: {persona.explanation}
+
+    Situation:
+    - Description: {situation.situation}
+    - Potential Flows: {', '.join(situation.potential_flows)}
+
+    Conversation Flow:
+    - States: {', '.join(flow.conversation_flow.states)}
+
+    Instructions:
+    1. Start the conversation with the initial state.
+    2. Follow the flow of states sequentially.
+    3. Generate conversation turns for both the agent and the persona.
+    4. Ensure the conversation ends when the flow reaches the final state.
+    5. Indicate if the conversation should stop after the final state.
+
+    Your response should be a valid JSON object that can be directly parsed into the PersonaLLMResponse structure. Do not include any explanations or additional text outside of the JSON object.
+
+    Generate the conversation now:
+    """
+    return prompt

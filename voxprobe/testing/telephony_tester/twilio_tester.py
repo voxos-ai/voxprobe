@@ -2,9 +2,11 @@ import audioop
 import base64
 from io import BytesIO
 import json
+import random
 import traceback
 from fastapi.responses import PlainTextResponse
 import numpy as np
+from voxprobe.agents.agent import Agent
 from voxprobe.utils.audio_processing_utils import get_vad_pipeline
 from .telephony_tester import TelephonyTester
 from twilio.rest import Client
@@ -17,22 +19,49 @@ import requests
 import threading
 from twilio.twiml.voice_response import VoiceResponse, Connect
 import soundfile as sf
+import asyncio
+from voxprobe.handlers import DeepgramHandler
 
 class TwilioTester(TelephonyTester):
-    def __init__(self, agent, dataset, twilio_account_sid=None, twilio_auth_token=None, twilio_incoming_number=None):
+    def __init__(self, agent: Agent, dataset, twilio_account_sid=None, twilio_auth_token=None, twilio_incoming_number=None, **kwargs):
         super().__init__()
         print("Initializing TwilioTester...")
-        self.agent = agent
+        self.agent: Agent = agent
+        self.agent_provider = agent.platform
         self.dataset = dataset
         self.app = FastAPI()
         self.ngrok_process = None
         self.ngrok_url = None
         self.twilio_client = None
+        self.deepgram_handler = DeepgramHandler(api_key=kwargs.get("asr_api_key", None))  # Initialize DeepgramHandler
         
         # Use provided values or fall back to environment variables
         self.twilio_account_sid = twilio_account_sid or os.getenv("TWILIO_ACCOUNT_SID")
         self.twilio_auth_token = twilio_auth_token or os.getenv("TWILIO_AUTH_TOKEN")
         self.twilio_incoming_number = twilio_incoming_number or os.getenv("TWILIO_INCOMING_NUMBER")
+
+        self.call_in_progress = set()
+        self.complete_conversation_id = set()
+        self.conversation_queue = asyncio.Queue()
+        self.language = kwargs.get("language", "en-US")
+
+    def get_speech_output(self, final_audio):
+        # # Transcribe the collected audio
+        print(f"Transcribing audio")
+        #audio_buffer = BytesIO(final_audio)
+        response = self.deepgram_handler.transcribe_audio(final_audio, sample_rate=8000, encoding="linear16", channels=1, language=self.language)
+        transcription = response["results"]["utterances"][0]["transcript"]
+        print(f'Transcription: {transcription}')
+        
+        # Get LLM response
+        llm_response = self.get_llm_response(transcription)
+        print(f"LLM Response: {llm_response}")
+        
+        # Synthesize the LLM response
+        synthesized_audio = self.synthesize(llm_response)
+        print("Synthesized audio ready")
+        return synthesized_audio
+
 
     def configure(self):
         print("Configuring TwilioTester...")
@@ -72,7 +101,7 @@ class TwilioTester(TelephonyTester):
             final_audio = b''
             call_sid = None
             should_end_call = False
-            
+            vad_pipeline = get_vad_pipeline()  
             chunk_files = sorted([f for f in os.listdir("left_channel_segments") if f.startswith('chunk_') and f.endswith('.wav')],
                          key=lambda x: int(x.split('_')[1].split('.')[0]))
             print(chunk_files)
@@ -125,7 +154,6 @@ class TwilioTester(TelephonyTester):
                                     wav_buffer.seek(0)  # Rewind the buffer to the beginning so it can be read
                                     
                                     # Use VAD to detect if the audio contains speech  
-                                    vad_pipeline = get_vad_pipeline()  
                                     vad_result = vad_pipeline(wav_buffer)
                                     total_speech_duration = vad_result.get_timeline().duration()
                                     
@@ -136,25 +164,12 @@ class TwilioTester(TelephonyTester):
                                         print("Detected empty noise in the buffer")
                                         if should_end_call:
                                             print("Got to end the call, creating task to get recording")
-                                            # self.loop.create_task(process_followup_task(call_sid, stream_sid))
                                             await websocket.close()
                                             break
-                                        # with wave.open(f"op/trial_audio_{datetime.now()}.wav", 'wb') as wav_file:
-                                        #     wav_file.setnchannels(2)
-                                        #     wav_file.setsampwidth(2)
-                                        #     wav_file.setframerate(8000)
-                                            
-                                        #     # Convert the audio stream to the appropriate format
-                                        #     #wav_data = struct.pack(f'{len(final_audio)//2}h', *struct.unpack(f'{len(final_audio)//2}h', final_audio))
-                                        #     wav_file.writeframes(audio_stream) 
-                                        #     final_audio = b''            
-                                        
-                                        current_chunk_name = chunk_files[CURRENT_CHUNK]
-                                        file_path = os.path.join("left_channel_segments", current_chunk_name)    
-                                        with open(file_path, 'rb') as f:
-                                            audio = f.read()
-                                        CURRENT_CHUNK +=1
-                                        audio_data = audioop.lin2ulaw(audio, 2)
+
+                                        synthesized_audio = self.get_speech_output(final_audio)
+                                        # Send synthesized audio back to the websocket
+                                        audio_data = audioop.lin2ulaw(synthesized_audio, 2)
                                         base64_audio = base64.b64encode(audio_data).decode("utf-8")
                                         message = {
                                             'event': 'media',
@@ -165,6 +180,7 @@ class TwilioTester(TelephonyTester):
                                         }
                                         await websocket.send_text(json.dumps(message))
                                         speech_started = False
+                                        final_audio = b''  # Reset final_audio for the next speech segment
                                         if CURRENT_CHUNK == len(chunk_files)-1:
                                             print("We've reached the end")
                                             should_end_call = True
@@ -219,11 +235,24 @@ class TwilioTester(TelephonyTester):
             print(f"Twilio number {self.twilio_incoming_number} not found")
         print("Twilio setup complete.")
 
+    async def monitor_calls(self):
+        while True:
+            conversation_id = await self.conversation_queue.get()
+            self.call_in_progress.add(conversation_id)
+            while not self.agent.is_call_complete(conversation_id):
+                await asyncio.sleep(5)  # Check every 5 seconds
+            self.call_in_progress.remove(conversation_id)
+            self.complete_conversation_id.add(conversation_id)
+            self.conversation_queue.task_done()
+
     def run_test(self):
         print("Running test...")
-        # TODO: Implement test logic
-        super().run_test()
-        print("Test completed.")
+
+        datapoint = random.choice(self.dataset.persona_prompt_ds.items())
+        print(f"datapoint {datapoint}")
+        # conversation_id = self.agent.make_call(recipient_phone_number=self.twilio_incoming_number)
+        # self.conversation_queue.put_nowait(conversation_id)
+        # print(f"Made call and now waiting for the {conversation_id} call to be complete.")
 
     def teardown(self):
         print("Tearing down...")
@@ -241,8 +270,23 @@ class TwilioTester(TelephonyTester):
         self.configure()
         server_thread = threading.Thread(target=self.start_server)
         server_thread.start()
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.monitor_calls())
         try:
             self.run_test()
+            loop.run_until_complete(self.conversation_queue.join())
         finally:
             self.teardown()
         print("TwilioTester run completed.")
+
+    def transcribe(self, audio_bytes):
+        # Implement your transcription logic here
+        pass
+
+    def get_llm_response(self, transcription):
+        # Implement your logic to get LLM response here
+        pass
+
+    def synthesize(self, llm_response):
+        # Implement your synthesis logic here
+        pass

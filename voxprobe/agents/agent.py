@@ -22,3 +22,6 @@ class Agent:
     def get_executions(self):
         # TODO: Implement first message retrieval logic
         pass
+    
+    def make_call(self):
+        pass

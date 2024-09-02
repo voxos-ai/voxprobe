@@ -39,6 +39,8 @@ class Flow(BaseModel):
     conversation_flow: ConversationFlow = Field(..., description="List of states conversation can flow to")
     explanation: str = Field(..., description="explaination of the conversation flow")
 
+class Flows(BaseModel):
+    flows: List[Flow] = Field(..., description="List of flows")
 
 class Persona(BaseModel):
     persona: str = Field(..., description="The name or description of the persona")
@@ -73,3 +75,18 @@ class Voices(BaseModel):
     persona_voices: Dict[str, VoiceProfile] = Field(..., description="Voice profiles for each persona")
 
 
+class PersonaLLMResponse(BaseModel):
+    message: str = Field(..., description="The message to be sent to the agent")
+    should_stop: bool = Field(..., description="Whether the conversation should stop")
+
+class SituationDetail(BaseModel):
+    prompt: str
+    flow: Flow
+    background_noise: Noise
+
+
+class PersonaDataset(BaseModel):
+    agent_persona: AgentPersona
+    personas: Dict[str, List[Persona]]
+    background_noises: Dict[str, List[Noise]]
+    persona_prompt_ds: Dict[str, Dict[str, SituationDetail]]

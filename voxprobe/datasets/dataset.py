@@ -1,4 +1,6 @@
-from ..models import ConversationGraph, Persona, VoiceProfile, Voices
+from collections import defaultdict
+from voxprobe.utils.prompt_utils import create_persona_llm_prompt
+from ..models import ConversationGraph, Flows, Persona, VoiceProfile, Voices
 from ..models import AgentPersona, Personas, Scenarios, Situation, Flow, BackgroundNoise, Voices
 from ..utils import get_agent_persona_prompt, get_user_personas_prompt, get_user_scenarios_prompt, get_user_flows_prompt, get_user_background_noises_prompt, get_user_voices_prompt, create_conversation_graph_prompt
 from ..utils import generate
@@ -22,7 +24,7 @@ class Dataset:
         self.agent_prompt = agent_prompt
         self.model = model
         self.conversation_graph = conversation_graph
-        self.persona_scenario_flow_map = {}  # New attribute to maintain relationships
+        self.persona_scenario_flow_map = {}  # Updated attribute to maintain relationships
     
     def generate_agent_persona(self):
         print("Generating agent persona...")
@@ -60,7 +62,9 @@ class Dataset:
             print(f"Generating scenarios for persona: {persona.persona}")
             scenarios = generate(self.model, base_prompt, system_prompt=system_prompt, response_model=Scenarios)
             self.scenarios.append(scenarios)
-            self.persona_scenario_flow_map[persona.persona] = {'persona': persona, 'scenarios': scenarios, 'flows': []}
+            self.persona_scenario_flow_map[persona.persona] = {'persona': persona, 'scenarios': {'situations': []}}
+            for situation in scenarios.situations:
+                self.persona_scenario_flow_map[persona.persona]['scenarios']['situations'].append({'situation': situation, 'flows': []})
             if len(self.scenarios) >= num_rows:
                 print(f"Generated {len(self.scenarios)} scenarios and hence breaking.")
                 break
@@ -74,13 +78,14 @@ class Dataset:
         self.flows = []
         for persona_name, data in self.persona_scenario_flow_map.items():
             persona = data['persona']
-            for scenario in data['scenarios'].situations:
+            for situation_data in data['scenarios']['situations']:
+                scenario = situation_data['situation']
                 base_prompt = get_user_flows_prompt(self.agent_persona, persona, scenario, self.conversation_graph, self.agent_prompt)
                 system_prompt = "You are an AI assistant tasked with generating flows for the given persona and situation."
-                flow = generate(self.model, base_prompt, system_prompt=system_prompt, response_model=Flow)
-                self.persona_scenario_flow_map[persona_name]['flows'].extend(flow)
-                self.flows.extend(flow)
-                data['flows'].extend(flow)
+                flow = generate(self.model, base_prompt, system_prompt=system_prompt, response_model=Flows)
+                print(f"Flow for scenario {scenario.situation} is {flow}")
+                situation_data['flows'].extend(flow.flows)
+                self.flows.extend(flow if isinstance(flow, list) else [flow])
         print(f"Generated {len(self.flows)} flows.")
 
     #TODO: Change it enough to include persona details
@@ -138,6 +143,24 @@ class Dataset:
         self.conversation_graph = generate(self.model, base_prompt, system_prompt=system_prompt, response_model=ConversationGraph)
         print("Conversation graph generated successfully.")
 
+    def generate_persona_llm_prompts(self, num_rows = None):
+        prompts = []
+        self.persona_prompt_ds = defaultdict(dict)
+        for persona_name, data in self.persona_scenario_flow_map.items():
+            persona = data['persona']
+            for situation_data in data['scenarios']['situations']:
+                situation = situation_data['situation']
+                self.persona_prompt_ds[persona_name][situation.situation] = {'potential_flows': situation.potential_flows}
+                for flow in situation_data['flows']:
+                    prompt = create_persona_llm_prompt(self.agent_persona, persona, situation, flow)
+                    prompts.append(prompt)
+                    
+                    self.persona_prompt_ds[persona_name][situation.situation]["prompts"] = prompt
+                    self.persona_prompt_ds[persona_name][situation.situation]["flow"] = flow
+                    if num_rows is not None and len(prompts) >= num_rows:
+                        break
+        return prompts
+
     def generate_dataset(self, num_rows = None):
 
         print("Starting dataset generation...")
@@ -173,14 +196,18 @@ class Dataset:
         self.generate_background_noises()
         print(f"Generated {len(self.background_noises.noises)} background noises.")
 
-
+        print(f"Generating persona llm prompts...")
+        self.generate_persona_llm_prompts(num_rows= num_rows)
+        print(f"Generated {len(self.persona_prompt_ds)} persona llm prompts.")
+        
         print("Generating permutations...")
         self.permutations = []
         i = 0
         for persona_name, data in self.persona_scenario_flow_map.items():
             persona = data['persona']
-            for scenario in data['scenarios'].situations:
-                for flow in data['flows']:
+            for scenario_data in data['scenarios']['situations']:
+                scenario = scenario_data['situation']
+                for flow in scenario_data['flows']:
                     noise = self.background_noises.noises[i]
                     i +=1
                     if i == len(self.background_noises.noises):
@@ -213,27 +240,22 @@ class Dataset:
 
     def save_dataset(self, path):
         import json
+        import random
         with open(path, 'w') as f:
             json.dump({
                 'agent_persona': self.agent_persona.dict(),
                 'personas': self.personas.dict(),
                 'background_noises': self.background_noises.dict(),
-                'voices': self.voices.dict(),
-                'persona_scenario_flow_map': {
+                'persona_prompt_ds': {
                     persona_name: {
-                        'persona': data['persona'].dict(),
-                        'scenarios': data['scenarios'].dict(),
-                        'flows': [flow.dict() for flow in data['flows']]
-                    } for persona_name, data in self.persona_scenario_flow_map.items()
-                },
-                'permutations': [
-                    {
-                        'persona': perm['persona'].dict(),
-                        'scenario': perm['scenario'].dict(),
-                        'flow': perm['flow'].dict(),
-                        'background_noise': perm['background_noise'].dict()
-                    } for perm in self.permutations
-                ]
+                        situation: {
+                            'prompt': data['prompts'],
+                            'flow': data['flow'].dict(),
+                            #'voice': random.choice(list(self.voices.persona_voices.values())).dict(),
+                            'background_noise': random.choice(self.background_noises.noises).dict()
+                        } for situation, data in situations.items()
+                    } for persona_name, situations in self.persona_prompt_ds.items()
+                }
             }, f, indent=2)
 
     def load_dataset(self, path):
@@ -243,19 +265,25 @@ class Dataset:
         self.agent_persona = AgentPersona.parse_obj(data['agent_persona'])
         self.personas = Personas.parse_obj(data['personas'])
         self.background_noises = BackgroundNoise.parse_obj(data['background_noises'])
-        self.voices = Voices.parse_obj(data['voices'])
+        #self.voices = Voices.parse_obj(data['voices'])
         self.persona_scenario_flow_map = {
             persona_name: {
                 'persona': Persona.parse_obj(map_data['persona']),
-                'scenarios': Scenarios.parse_obj(map_data['scenarios']),
-                'flows': [Flow.parse_obj(flow) for flow in map_data['flows']]
+                'scenarios': {
+                    'situations': [
+                        {
+                            'situation': Situation.parse_obj(situation_data['situation']),
+                            'flows': [Flows.dict(flow) for flow in situation_data['flows']]
+                        } for situation_data in map_data['scenarios']['situations']
+                    ]
+                }
             } for persona_name, map_data in data['persona_scenario_flow_map'].items()
         }
         self.permutations = [
             {
                 'persona': Persona.parse_obj(perm['persona']),
                 'scenario': Situation.parse_obj(perm['scenario']),
-                'flow': Flow.parse_obj(perm['flow']),
+                'flow': Flows.parse_obj(perm['flow']),
                 'background_noise': BackgroundNoise.parse_obj({'noises': [perm['background_noise']]})
             } for perm in data['permutations']
         ]
